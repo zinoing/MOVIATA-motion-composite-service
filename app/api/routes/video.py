@@ -1,16 +1,20 @@
+import json
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.core.config import (
+    ALLOWED_IMAGE_EXTENSIONS,
     ALLOWED_VIDEO_EXTENSIONS,
     MAX_UPLOAD_SIZE_MB,
+    OUTPUTS_DIR,
     TEMP_FRAMES_DIR,
 )
+from app.processing.pipeline import get_state, run as run_pipeline
 from app.tasks.composite import process_video_task
-from app.utils.frame_extractor import extract_frames
+from app.utils.frame_extractor import extract_frames, extract_single_image
 
 router = APIRouter(prefix="/video", tags=["video"])
 
@@ -18,7 +22,7 @@ router = APIRouter(prefix="/video", tags=["video"])
 @router.post("/upload")
 async def upload_video(
     file: UploadFile = File(...),
-    frame_interval: int = Form(default=5, ge=1, le=30),
+    frame_interval: int = Form(default=60, ge=1, le=120),
     person_color: str = Form(default="#FF69B4"),
     background_color: str = Form(default="#FFFFFF"),
     outline_thickness: int = Form(default=2, ge=1, le=10),
@@ -65,10 +69,12 @@ async def extract_frames_endpoint(
     n: int = Form(default=5, ge=1, le=120, description="Extract every Nth frame"),
 ):
     ext = Path(file.filename).suffix.lower()
-    if ext not in ALLOWED_VIDEO_EXTENSIONS:
+    is_image = ext in ALLOWED_IMAGE_EXTENSIONS
+    if not is_image and ext not in ALLOWED_VIDEO_EXTENSIONS:
+        all_allowed = sorted(ALLOWED_VIDEO_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS)
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported format '{ext}'. Allowed: {', '.join(ALLOWED_VIDEO_EXTENSIONS)}",
+            detail=f"Unsupported format '{ext}'. Allowed: {', '.join(all_allowed)}",
         )
 
     content = await file.read()
@@ -80,11 +86,14 @@ async def extract_frames_endpoint(
         )
 
     job_id = str(uuid.uuid4())
-    video_path = TEMP_FRAMES_DIR / f"{job_id}{ext}"
-    video_path.write_bytes(content)
+    file_path = TEMP_FRAMES_DIR / f"{job_id}{ext}"
+    file_path.write_bytes(content)
 
     try:
-        result = extract_frames(str(video_path), n, job_id)
+        if is_image:
+            result = extract_single_image(str(file_path), job_id)
+        else:
+            result = extract_frames(str(file_path), n, job_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except IOError as exc:
@@ -109,19 +118,93 @@ async def extract_frames_endpoint(
     }
 
 
-@router.get("/status/{job_id}")
-async def get_job_status(job_id: str):
-    from app.tasks.composite import process_video_task
-    from celery.result import AsyncResult
+@router.post("/process")
+async def process_composite(
+    job_id: str = Form(...),
+    frame_paths: list[str] = Form(...),
+    person_color: str = Form(default="#000000"),
+    background_color: str = Form(default="#000000"),
+    outline_thickness: int = Form(default=2, ge=1, le=10),
+    mode: str = Form(default="ghost", pattern="^(ghost|outline)$"),
+    point_coords: str | None = Form(default=None),
+):
+    temp_root = str(TEMP_FRAMES_DIR.resolve())
+    for p in frame_paths:
+        try:
+            resolved = Path(p).resolve()
+            if not str(resolved).startswith(temp_root):
+                raise HTTPException(status_code=422, detail=f"Invalid frame path: {p}")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=422, detail=f"Invalid frame path: {p}")
 
-    result = AsyncResult(job_id, app=process_video_task.app)
-    response = {"job_id": job_id, "status": result.state}
+    parsed_point_coords: list[dict] | None = None
+    if point_coords:
+        try:
+            parsed_point_coords = json.loads(point_coords)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid point_coords JSON")
 
-    if result.state == "SUCCESS":
-        response["result"] = result.get()
-    elif result.state == "FAILURE":
-        response["error"] = str(result.info)
-    elif result.state == "PROGRESS":
-        response["progress"] = result.info
+    run_pipeline(
+        job_id=job_id,
+        frame_paths=frame_paths,
+        person_color=person_color,
+        background_color=background_color,
+        outline_thickness=outline_thickness,
+        mode=mode,
+        point_coords=parsed_point_coords,
+    )
+
+    return JSONResponse(
+        status_code=202,
+        content={"job_id": job_id, "celery_task_id": job_id, "status": "queued"},
+    )
+
+
+@router.get("/layer/{job_id}/{index}")
+async def get_layer(job_id: str, index: int):
+    layer_path = OUTPUTS_DIR / f"{job_id}_layer_{index}.png"
+    if not layer_path.exists():
+        raise HTTPException(status_code=404, detail="Layer not found")
+    return FileResponse(path=str(layer_path), media_type="image/png")
+
+
+@router.get("/frame/{job_id}/{frame_index}")
+async def get_frame(job_id: str, frame_index: int):
+    frame_path = TEMP_FRAMES_DIR / job_id / f"frame_{frame_index:06d}.png"
+    if not frame_path.exists():
+        raise HTTPException(status_code=404, detail="Frame not found")
+    return FileResponse(path=str(frame_path), media_type="image/png")
+
+
+@router.get("/status/{task_id}")
+async def get_job_status(task_id: str):
+    state = get_state(task_id)
+
+    response: dict = {"task_id": task_id, "status": state["status"]}
+
+    if state["status"] == "SUCCESS":
+        response["result"] = state.get("result")
+    elif state["status"] == "FAILURE":
+        response["error"] = state.get("error")
+    elif state["status"] == "PROGRESS":
+        response["progress"] = {"step": state.get("step"), "progress": state.get("progress", 0)}
 
     return response
+
+
+@router.get("/result/{job_id}")
+async def get_result(job_id: str, format: str = "png"):
+    ext = "mp4" if format == "mp4" else "png"
+    output_path = OUTPUTS_DIR / f"{job_id}.{ext}"
+
+    if not output_path.exists():
+        raise HTTPException(status_code=404, detail="Result not ready yet.")
+
+    media_type = "video/mp4" if ext == "mp4" else "image/png"
+    return FileResponse(
+        path=str(output_path),
+        media_type=media_type,
+        filename=f"moviata-motion-{job_id[:8]}.{ext}",
+    )

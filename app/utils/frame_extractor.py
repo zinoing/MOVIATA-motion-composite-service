@@ -1,6 +1,8 @@
 import cv2
+import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
+from PIL import Image
 
 from app.core.config import MAX_VIDEO_DURATION_SEC, TEMP_FRAMES_DIR
 
@@ -20,6 +22,57 @@ class ExtractionResult:
     total_frames: int
     duration_sec: float
     frame_interval: int
+
+
+def load_frames_by_indices(frame_indices: list[int], job_id: str) -> ExtractionResult:
+    """Return ExtractionResult using already-extracted frames at specific indices."""
+    output_dir = TEMP_FRAMES_DIR / job_id
+    if not output_dir.exists():
+        raise ValueError(f"No extracted frames directory found for job_id: {job_id}")
+
+    frames: list[ExtractedFrame] = []
+    for idx in sorted(frame_indices):
+        path = output_dir / f"frame_{idx:06d}.png"
+        if not path.exists():
+            raise ValueError(f"Frame {idx} not found for job_id: {job_id}. Re-upload the video.")
+        frames.append(ExtractedFrame(path=path, frame_index=idx, timestamp_sec=0.0))
+
+    if not frames:
+        raise ValueError(f"No valid frames found for job_id: {job_id}")
+
+    return ExtractionResult(
+        frames=frames,
+        output_dir=output_dir,
+        fps=30.0,
+        total_frames=len(frames),
+        duration_sec=0.0,
+        frame_interval=1,
+    )
+
+
+def extract_single_image(image_path: str, job_id: str) -> ExtractionResult:
+    """단일 이미지를 frame_000000.png 로 변환하여 1-프레임 ExtractionResult 를 반환한다."""
+    try:
+        img = Image.open(image_path).convert("RGB")
+    except Exception as exc:
+        raise ValueError(f"Cannot open image file: {image_path}") from exc
+
+    output_dir = TEMP_FRAMES_DIR / job_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    frame_path = output_dir / "frame_000000.png"
+    bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    if not cv2.imwrite(str(frame_path), bgr):
+        raise IOError(f"Failed to write image frame to {frame_path}")
+
+    return ExtractionResult(
+        frames=[ExtractedFrame(path=frame_path, frame_index=0, timestamp_sec=0.0)],
+        output_dir=output_dir,
+        fps=0.0,
+        total_frames=1,
+        duration_sec=0.0,
+        frame_interval=1,
+    )
 
 
 def extract_frames(video_path: str, frame_interval: int, job_id: str) -> ExtractionResult:
