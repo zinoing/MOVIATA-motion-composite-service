@@ -25,9 +25,11 @@ COPY app/ ./app/
 RUN mkdir -p checkpoints/sam2 outputs temp_frames
 
 # Download SAM2 checkpoint from Cloudflare R2 at runtime via entrypoint
-COPY entrypoint.sh .
+COPY entrypoint.sh handler.py ./
 RUN chmod +x entrypoint.sh
 
 EXPOSE 8000
 
-ENTRYPOINT ["./entrypoint.sh"]
+# RunPod Serverless: handler.py boots FastAPI+Celery internally
+# Direct deployment: ./entrypoint.sh
+CMD ["python", "handler.py"]
