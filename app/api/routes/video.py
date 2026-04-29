@@ -1,4 +1,6 @@
+import base64
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -112,6 +114,7 @@ async def extract_frames_endpoint(
                 "index": f.frame_index,
                 "timestamp_sec": f.timestamp_sec,
                 "path": str(f.path),
+                "data": base64.b64encode(f.path.read_bytes()).decode(),
             }
             for f in result.frames
         ],
@@ -122,22 +125,47 @@ async def extract_frames_endpoint(
 async def process_composite(
     job_id: str = Form(...),
     frame_paths: list[str] = Form(...),
+    frame_data: str | None = Form(default=None),
     person_color: str = Form(default="#000000"),
     background_color: str = Form(default="#000000"),
     outline_thickness: int = Form(default=2, ge=1, le=10),
     mode: str = Form(default="ghost", pattern="^(ghost|outline)$"),
     point_coords: str | None = Form(default=None),
 ):
-    temp_root = str(TEMP_FRAMES_DIR.resolve())
-    for p in frame_paths:
+    if frame_data is not None:
+        # RunPod: frames were extracted on a different worker — restore from base64 payload.
         try:
-            resolved = Path(p).resolve()
-            if not str(resolved).startswith(temp_root):
-                raise HTTPException(status_code=422, detail=f"Invalid frame path: {p}")
-        except HTTPException:
-            raise
+            data_list: list[str] = json.loads(frame_data)
         except Exception:
-            raise HTTPException(status_code=422, detail=f"Invalid frame path: {p}")
+            raise HTTPException(status_code=422, detail="Invalid frame_data JSON")
+        if len(data_list) != len(frame_paths):
+            raise HTTPException(status_code=422, detail="frame_data length must match frame_paths")
+
+        frame_dir = TEMP_FRAMES_DIR / job_id
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        resolved_paths: list[str] = []
+        for path_str, b64_str in zip(frame_paths, data_list):
+            frame_name = Path(path_str).name
+            if not re.fullmatch(r"frame_\d{6}\.png", frame_name):
+                raise HTTPException(status_code=422, detail=f"Invalid frame filename: {frame_name}")
+            local_path = frame_dir / frame_name
+            try:
+                local_path.write_bytes(base64.b64decode(b64_str))
+            except Exception:
+                raise HTTPException(status_code=422, detail=f"Invalid base64 data for {frame_name}")
+            resolved_paths.append(str(local_path))
+        frame_paths = resolved_paths
+    else:
+        temp_root = str(TEMP_FRAMES_DIR.resolve())
+        for p in frame_paths:
+            try:
+                resolved = Path(p).resolve()
+                if not str(resolved).startswith(temp_root):
+                    raise HTTPException(status_code=422, detail=f"Invalid frame path: {p}")
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=422, detail=f"Invalid frame path: {p}")
 
     parsed_point_coords: list[dict] | None = None
     if point_coords:
