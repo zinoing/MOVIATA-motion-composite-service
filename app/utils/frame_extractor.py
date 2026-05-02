@@ -1,3 +1,5 @@
+import subprocess
+import tempfile
 import cv2
 import numpy as np
 from dataclasses import dataclass
@@ -5,6 +7,31 @@ from pathlib import Path
 from PIL import Image
 
 from app.core.config import MAX_VIDEO_DURATION_SEC, TEMP_FRAMES_DIR
+
+
+def _downscale_video(video_path: str) -> str:
+    """
+    Re-encode video to max 720p / CRF 28 for faster frame extraction.
+    Returns path to temp file; caller must delete it after use.
+    """
+    suffix = Path(video_path).suffix or ".mp4"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp.close()
+    out_path = tmp.name
+
+    cmd = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-vf", "scale=-2:min'(ih,720)'",
+        "-c:v", "libx264", "-crf", "28", "-preset", "fast",
+        "-an",
+        out_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=300)
+    if result.returncode != 0:
+        Path(out_path).unlink(missing_ok=True)
+        raise IOError(f"ffmpeg downscale failed: {result.stderr.decode(errors='replace')}")
+
+    return out_path
 
 
 @dataclass
@@ -76,48 +103,62 @@ def extract_single_image(image_path: str, job_id: str) -> ExtractionResult:
 
 
 def extract_frames(video_path: str, frame_interval: int, job_id: str) -> ExtractionResult:
+    # Quick duration + resolution check before the expensive ffmpeg step
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video file: {video_path}")
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_sec = total_frames / fps
-
+    fps_orig = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames_orig = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    duration_sec = total_frames_orig / fps_orig
     if duration_sec > MAX_VIDEO_DURATION_SEC:
-        cap.release()
         raise ValueError(
             f"Video duration {duration_sec:.1f}s exceeds the {MAX_VIDEO_DURATION_SEC}s limit"
         )
 
-    output_dir = TEMP_FRAMES_DIR / job_id
-    output_dir.mkdir(parents=True, exist_ok=True)
+    needs_downscale = height > 720
+    downscaled_path = _downscale_video(video_path) if needs_downscale else None
+    processing_path = downscaled_path or video_path
+    try:
+        cap = cv2.VideoCapture(processing_path)
+        if not cap.isOpened():
+            raise ValueError("Cannot open video for frame extraction")
 
-    extracted: list[ExtractedFrame] = []
-    frame_idx = 0
+        fps = cap.get(cv2.CAP_PROP_FPS) or fps_orig
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+        output_dir = TEMP_FRAMES_DIR / job_id
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-        if frame_idx % frame_interval == 0:
-            path = output_dir / f"frame_{frame_idx:06d}.png"
-            success = cv2.imwrite(str(path), frame)
-            if not success:
-                cap.release()
-                raise IOError(f"Failed to write frame {frame_idx} to {path}")
-            extracted.append(
-                ExtractedFrame(
-                    path=path,
-                    frame_index=frame_idx,
-                    timestamp_sec=round(frame_idx / fps, 4),
+        extracted: list[ExtractedFrame] = []
+        frame_idx = 0
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if frame_idx % frame_interval == 0:
+                path = output_dir / f"frame_{frame_idx:06d}.png"
+                success = cv2.imwrite(str(path), frame)
+                if not success:
+                    cap.release()
+                    raise IOError(f"Failed to write frame {frame_idx} to {path}")
+                extracted.append(
+                    ExtractedFrame(
+                        path=path,
+                        frame_index=frame_idx,
+                        timestamp_sec=round(frame_idx / fps, 4),
+                    )
                 )
-            )
 
-        frame_idx += 1
+            frame_idx += 1
 
-    cap.release()
+        cap.release()
+    finally:
+        if downscaled_path:
+            Path(downscaled_path).unlink(missing_ok=True)
 
     return ExtractionResult(
         frames=extracted,

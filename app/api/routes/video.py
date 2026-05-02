@@ -5,7 +5,7 @@ import uuid
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile  # File/UploadFile used by /upload
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from PIL import Image
 
@@ -19,6 +19,7 @@ from app.core.config import (
 from app.processing.pipeline import get_state, run as run_pipeline
 from app.tasks.composite import process_video_task
 from app.utils.frame_extractor import extract_frames, extract_single_image
+from app.utils.r2 import download_object, generate_upload_key, presigned_put_url
 
 router = APIRouter(prefix="/video", tags=["video"])
 
@@ -67,12 +68,35 @@ async def upload_video(
     )
 
 
+@router.post("/presigned-upload")
+async def get_presigned_upload_url(
+    filename: str = Form(...),
+    content_type: str = Form(...),
+):
+    ext = Path(filename).suffix.lower()
+    all_allowed = ALLOWED_VIDEO_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS
+    if ext not in all_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported format '{ext}'. Allowed: {', '.join(sorted(all_allowed))}",
+        )
+    object_key = generate_upload_key(filename)
+    try:
+        url = presigned_put_url(object_key, content_type)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"R2 presigned URL generation failed: {exc}")
+    return {"presigned_url": url, "object_key": object_key}
+
+
 @router.post("/extract-frames")
 async def extract_frames_endpoint(
-    file: UploadFile = File(...),
+    r2_key: str = Form(...),
     n: int = Form(default=5, ge=1, le=120, description="Extract every Nth frame"),
 ):
-    ext = Path(file.filename).suffix.lower()
+    if not r2_key.startswith("uploads/"):
+        raise HTTPException(status_code=400, detail="Invalid R2 key")
+
+    ext = Path(r2_key).suffix.lower()
     is_image = ext in ALLOWED_IMAGE_EXTENSIONS
     if not is_image and ext not in ALLOWED_VIDEO_EXTENSIONS:
         all_allowed = sorted(ALLOWED_VIDEO_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS)
@@ -81,17 +105,13 @@ async def extract_frames_endpoint(
             detail=f"Unsupported format '{ext}'. Allowed: {', '.join(all_allowed)}",
         )
 
-    content = await file.read()
-    size_mb = len(content) / (1024 * 1024)
-    if size_mb > MAX_UPLOAD_SIZE_MB:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large ({size_mb:.1f}MB). Max allowed: {MAX_UPLOAD_SIZE_MB}MB",
-        )
-
     job_id = str(uuid.uuid4())
     file_path = TEMP_FRAMES_DIR / f"{job_id}{ext}"
-    file_path.write_bytes(content)
+
+    try:
+        download_object(r2_key, str(file_path))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to download from R2: {exc}")
 
     try:
         if is_image:
@@ -102,6 +122,8 @@ async def extract_frames_endpoint(
         raise HTTPException(status_code=422, detail=str(exc))
     except IOError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        file_path.unlink(missing_ok=True)
 
     return {
         "job_id": job_id,
