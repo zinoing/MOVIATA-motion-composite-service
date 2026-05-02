@@ -93,9 +93,6 @@ async def extract_frames_endpoint(
     r2_key: str = Form(...),
     n: int = Form(default=5, ge=1, le=120, description="Extract every Nth frame"),
 ):
-    if not r2_key.startswith("uploads/"):
-        raise HTTPException(status_code=400, detail="Invalid R2 key")
-
     ext = Path(r2_key).suffix.lower()
     is_image = ext in ALLOWED_IMAGE_EXTENSIONS
     if not is_image and ext not in ALLOWED_VIDEO_EXTENSIONS:

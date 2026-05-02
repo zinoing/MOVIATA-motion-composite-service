@@ -27,7 +27,7 @@ def _s3():
 
 def generate_upload_key(filename: str) -> str:
     ext = Path(filename).suffix.lower() or ".bin"
-    return f"uploads/{uuid.uuid4()}{ext}"
+    return f"{uuid.uuid4()}{ext}"
 
 
 def presigned_put_url(object_key: str, content_type: str, expires_in: int = 300) -> str:
