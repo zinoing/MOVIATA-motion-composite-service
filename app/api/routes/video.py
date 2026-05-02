@@ -2,10 +2,12 @@ import base64
 import json
 import re
 import uuid
+from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from PIL import Image
 
 from app.core.config import (
     ALLOWED_IMAGE_EXTENSIONS,
@@ -199,11 +201,28 @@ async def get_layer(job_id: str, index: int):
 
 
 @router.get("/frame/{job_id}/{frame_index}")
-async def get_frame(job_id: str, frame_index: int):
+async def get_frame(
+    job_id: str,
+    frame_index: int,
+    w: int = Query(default=None, gt=0, le=3840),
+):
     frame_path = TEMP_FRAMES_DIR / job_id / f"frame_{frame_index:06d}.png"
     if not frame_path.exists():
         raise HTTPException(status_code=404, detail="Frame not found")
-    return FileResponse(path=str(frame_path), media_type="image/png")
+    if w is None:
+        return FileResponse(path=str(frame_path), media_type="image/png")
+    img = Image.open(frame_path).convert("RGB")
+    if w < img.width:
+        h = round(img.height * w / img.width)
+        img = img.resize((w, h), Image.LANCZOS)
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.get("/status/{task_id}")
