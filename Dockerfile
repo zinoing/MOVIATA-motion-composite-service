@@ -4,6 +4,7 @@ FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
 # System dependencies
 RUN apt-get update && apt-get install -y \
     git \
+    curl \
     ffmpeg \
     libgl1-mesa-glx \
     libglib2.0-0 \
