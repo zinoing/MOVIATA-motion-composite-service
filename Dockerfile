@@ -19,6 +19,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install SAM2 from GitHub
 RUN pip install --no-cache-dir git+https://github.com/facebookresearch/sam2.git
 
+# Patch hieradet.py: add weights_only=False to torch.load (required for PyTorch 2.x)
+RUN python -c "\
+import site, pathlib, re; \
+p = pathlib.Path(site.getsitepackages()[0]) / 'sam2/modeling/backbones/hieradet.py'; \
+p.write_text(re.sub(r'torch\.load\(f, map_location=\"cpu\"\)', 'torch.load(f, map_location=\"cpu\", weights_only=False)', p.read_text()))"
+
 # Copy application code
 COPY app/ ./app/
 
