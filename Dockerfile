@@ -21,9 +21,13 @@ RUN pip install --no-cache-dir git+https://github.com/facebookresearch/sam2.git
 
 # Patch hieradet.py: add weights_only=False to torch.load (required for PyTorch 2.x)
 RUN python -c "\
-import site, pathlib, re; \
-p = pathlib.Path(site.getsitepackages()[0]) / 'sam2/modeling/backbones/hieradet.py'; \
-p.write_text(re.sub(r'torch\.load\(f, map_location=\"cpu\"\)', 'torch.load(f, map_location=\"cpu\", weights_only=False)', p.read_text()))"
+import pathlib, re, sam2; \
+p = pathlib.Path(sam2.__file__).parent / 'modeling/backbones/hieradet.py'; \
+orig = p.read_text(); \
+patched = re.sub(r'torch\.load\(f, map_location=\"cpu\"\)', 'torch.load(f, map_location=\"cpu\", weights_only=False)', orig); \
+assert patched != orig, 'Patch did not match: check torch.load signature in hieradet.py'; \
+p.write_text(patched); \
+print('[patch] hieradet.py patched successfully')"
 
 # Copy application code
 COPY app/ ./app/
