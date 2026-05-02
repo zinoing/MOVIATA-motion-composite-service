@@ -22,7 +22,7 @@ def _downscale_video(video_path: str) -> str:
     cmd = [
         "ffmpeg", "-y", "-i", video_path,
         "-vf", "scale=-2:min'(ih,720)'",
-        "-c:v", "libx264", "-b:v", "1500k", "-preset", "fast",
+        "-c:v", "libx264", "-b:v", "1500k",
         "-an",
         out_path,
     ]
