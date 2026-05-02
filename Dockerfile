@@ -1,16 +1,22 @@
 # Base image: PyTorch with CUDA 12.1
 FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
 
-# System dependencies (ffmpeg via jellyfin repo for a recent build)
+# System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
-    software-properties-common \
+    xz-utils \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    && add-apt-repository ppa:savoury1/ffmpeg4 -y \
-    && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# ffmpeg — static binary from BtbN/FFmpeg-Builds (GPL, linux-amd64)
+RUN curl -L https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+    -o /tmp/ffmpeg.tar.xz \
+    && tar -xf /tmp/ffmpeg.tar.xz -C /tmp \
+    && mv /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /usr/local/bin/ffmpeg \
+    && mv /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffprobe /usr/local/bin/ffprobe \
+    && rm -rf /tmp/ffmpeg.tar.xz /tmp/ffmpeg-master-latest-linux64-gpl
 
 WORKDIR /app
 
