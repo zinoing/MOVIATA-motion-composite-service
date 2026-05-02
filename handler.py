@@ -28,11 +28,13 @@ All other responses are returned as the JSON body from FastAPI.
 
 import base64
 import io
+import json
 import os
 import pathlib
 import subprocess
 import sys
 import time
+import traceback
 
 import requests
 import runpod
@@ -82,8 +84,6 @@ def _start_services() -> None:
             "--host", "0.0.0.0",
             "--port", "8000",
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
     )
 
 
@@ -133,6 +133,8 @@ def _decode_files(files_b64: dict) -> dict:
 # ── Handler ────────────────────────────────────────────────────────────────────
 
 def handler(job: dict) -> dict:
+    print(f"[handler] job received: {json.dumps(job, ensure_ascii=False)}", flush=True)
+
     inp       = job.get("input") or {}
     endpoint  = inp.get("endpoint", "/health")
     method    = inp.get("method", "GET").upper()
@@ -141,6 +143,8 @@ def handler(job: dict) -> dict:
 
     url       = f"{FASTAPI_BASE}{endpoint}"
     form_data = _build_form_data(body)
+
+    print(f"[handler] → {method} {url}  body={dict(form_data)}  files={list(files_b64.keys())}", flush=True)
 
     try:
         if method == "GET":
@@ -158,7 +162,10 @@ def handler(job: dict) -> dict:
             resp = requests.post(url, data=form_data, timeout=300)
 
     except requests.RequestException as exc:
+        print(f"[handler] request failed: {exc}\n{traceback.format_exc()}", flush=True)
         return {"error": str(exc)}
+
+    print(f"[handler] ← {resp.status_code} ({len(resp.content)} bytes)", flush=True)
 
     # Binary image → base64 payload
     content_type = resp.headers.get("content-type", "")
@@ -176,6 +183,7 @@ def handler(job: dict) -> dict:
         payload = {"raw": resp.text}
 
     if not resp.ok:
+        print(f"[handler] error response: {json.dumps(payload, ensure_ascii=False)}", flush=True)
         return {"error": payload}
 
     return payload

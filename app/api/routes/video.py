@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+import traceback
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -93,6 +94,8 @@ async def extract_frames_endpoint(
     r2_key: str = Form(...),
     n: int = Form(default=5, ge=1, le=120, description="Extract every Nth frame"),
 ):
+    print(f"[extract-frames] request received  r2_key={r2_key!r}  n={n}", flush=True)
+
     ext = Path(r2_key).suffix.lower()
     is_image = ext in ALLOWED_IMAGE_EXTENSIONS
     if not is_image and ext not in ALLOWED_VIDEO_EXTENSIONS:
@@ -105,19 +108,29 @@ async def extract_frames_endpoint(
     job_id = str(uuid.uuid4())
     file_path = TEMP_FRAMES_DIR / f"{job_id}{ext}"
 
+    print(f"[extract-frames] downloading from R2  key={r2_key!r}", flush=True)
     try:
         download_object(r2_key, str(file_path))
+        print(f"[extract-frames] R2 download complete  dest={file_path}  size={file_path.stat().st_size} bytes", flush=True)
     except Exception as exc:
+        print(f"[extract-frames] R2 download failed:\n{traceback.format_exc()}", flush=True)
         raise HTTPException(status_code=502, detail=f"Failed to download from R2: {exc}")
 
     try:
+        print(f"[extract-frames] starting {'image' if is_image else 'video'} extraction  job_id={job_id}", flush=True)
         if is_image:
             result = extract_single_image(str(file_path), job_id)
         else:
             result = extract_frames(str(file_path), n, job_id)
+        print(f"[extract-frames] extraction complete  frames={len(result.frames)}  duration={result.duration_sec}s  fps={result.fps}", flush=True)
     except ValueError as exc:
+        print(f"[extract-frames] extraction error (422):\n{traceback.format_exc()}", flush=True)
         raise HTTPException(status_code=422, detail=str(exc))
     except IOError as exc:
+        print(f"[extract-frames] extraction error (500):\n{traceback.format_exc()}", flush=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        print(f"[extract-frames] unexpected error:\n{traceback.format_exc()}", flush=True)
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
         file_path.unlink(missing_ok=True)
