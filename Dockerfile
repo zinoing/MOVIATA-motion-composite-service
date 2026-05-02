@@ -1,13 +1,15 @@
 # Base image: PyTorch with CUDA 12.1
 FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
 
-# System dependencies
-RUN apt-get update && apt-get install -y \
+# System dependencies (ffmpeg via jellyfin repo for a recent build)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
-    ffmpeg \
+    software-properties-common \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    && add-apt-repository ppa:savoury1/ffmpeg4 -y \
+    && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

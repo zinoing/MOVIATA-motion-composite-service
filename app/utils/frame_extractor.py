@@ -11,7 +11,7 @@ from app.core.config import MAX_VIDEO_DURATION_SEC, TEMP_FRAMES_DIR
 
 def _downscale_video(video_path: str) -> str:
     """
-    Re-encode video to max 720p / CRF 28 for faster frame extraction.
+    Re-encode video to max 720p / 1500k bitrate for faster frame extraction.
     Returns path to temp file; caller must delete it after use.
     """
     suffix = Path(video_path).suffix or ".mp4"
@@ -22,7 +22,7 @@ def _downscale_video(video_path: str) -> str:
     cmd = [
         "ffmpeg", "-y", "-i", video_path,
         "-vf", "scale=-2:min'(ih,720)'",
-        "-c:v", "libx264", "-crf", "28", "-preset", "fast",
+        "-c:v", "libx264", "-b:v", "1500k", "-preset", "fast",
         "-an",
         out_path,
     ]
