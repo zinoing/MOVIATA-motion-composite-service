@@ -28,6 +28,8 @@ All other responses are returned as the JSON body from FastAPI.
 
 import base64
 import io
+import os
+import pathlib
 import subprocess
 import sys
 import time
@@ -40,6 +42,23 @@ import runpod
 FASTAPI_BASE = "http://localhost:8000"
 HEALTH_URL   = f"{FASTAPI_BASE}/health"
 BOOT_TIMEOUT = 120  # seconds to wait for FastAPI readiness
+
+# ── Checkpoint download (runs once at pod startup) ─────────────────────────────
+
+def _download_checkpoint() -> None:
+    r2_url = os.environ.get("R2_CHECKPOINT_URL", "")
+    checkpoint_dir = pathlib.Path(os.environ.get("SAM2_CHECKPOINT_DIR", "checkpoints/sam2"))
+    checkpoint_path = checkpoint_dir / "sam2.1_hiera_small.pt"
+    if checkpoint_path.exists():
+        print("[handler] Checkpoint already exists, skipping download.", flush=True)
+        return
+    if not r2_url:
+        raise RuntimeError("R2_CHECKPOINT_URL is not set")
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    print("[handler] Downloading SAM2 checkpoint from R2...", flush=True)
+    subprocess.run(["curl", "-L", "-o", str(checkpoint_path), r2_url], check=True)
+    print("[handler] Checkpoint downloaded.", flush=True)
+
 
 # ── Service bootstrap (runs once at pod startup) ───────────────────────────────
 
@@ -82,6 +101,7 @@ def _wait_ready() -> None:
     raise RuntimeError(f"FastAPI did not become ready within {BOOT_TIMEOUT}s")
 
 
+_download_checkpoint()
 _start_services()
 _wait_ready()
 
