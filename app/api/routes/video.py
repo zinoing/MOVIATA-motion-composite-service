@@ -148,7 +148,6 @@ async def extract_frames_endpoint(
                 "index": f.frame_index,
                 "timestamp_sec": f.timestamp_sec,
                 "path": str(f.path),
-                "data": base64.b64encode(f.path.read_bytes()).decode(),
             }
             for f in result.frames
         ],
