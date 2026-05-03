@@ -22,7 +22,7 @@ def _downscale_video(video_path: str) -> str:
     cmd = [
         "ffmpeg", "-y", "-i", video_path,
         "-vf", "scale=-2:min'(ih,720)'",
-        "-c:v", "libx264", "-b:v", "1500k",
+        "-c:v", "mpeg4", "-b:v", "1500k",
         "-an",
         out_path,
     ]
@@ -110,6 +110,7 @@ def extract_frames(video_path: str, frame_interval: int, job_id: str) -> Extract
     fps_orig = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames_orig = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     cap.release()
     duration_sec = total_frames_orig / fps_orig
     if duration_sec > MAX_VIDEO_DURATION_SEC:
@@ -117,7 +118,7 @@ def extract_frames(video_path: str, frame_interval: int, job_id: str) -> Extract
             f"Video duration {duration_sec:.1f}s exceeds the {MAX_VIDEO_DURATION_SEC}s limit"
         )
 
-    needs_downscale = height > 720
+    needs_downscale = height > 720 and width > 1280
     downscaled_path = _downscale_video(video_path) if needs_downscale else None
     processing_path = downscaled_path or video_path
     try:
