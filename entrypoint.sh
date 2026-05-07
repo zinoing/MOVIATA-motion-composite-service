@@ -17,6 +17,6 @@ fi
 echo "[entrypoint] Starting Celery worker..."
 celery -A app.tasks.celery_app worker --loglevel=info &
 
-# Start FastAPI server ($PORT injected by Railway, default 8000 for local)
-echo "[entrypoint] Starting FastAPI server on port ${PORT:-8000}..."
-exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}"
+# Start FastAPI server
+echo "[entrypoint] Starting FastAPI server..."
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000

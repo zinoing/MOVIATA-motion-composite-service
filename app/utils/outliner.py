@@ -119,13 +119,6 @@ def apply_outlines(
                 if item.get("object") else Image.new("RGBA", (w, h), (0, 0, 0, 0))
             )
 
-            # object 실루엣 영역에서 person 레이어 픽셀을 지워 object만 남김
-            if item.get("object"):
-                obj_alpha = np.array(item["object"])[:, :, 3]
-                person_arr = np.array(person_outline)
-                person_arr[obj_alpha > 10] = [0, 0, 0, 0]
-                person_outline = Image.fromarray(person_arr, "RGBA")
-
             person_outline.save(Path(tempfile.gettempdir()) / f"debug_person_outline_{len(outlined)}.png")
             object_outline.save(Path(tempfile.gettempdir()) / f"debug_object_outline_{len(outlined)}.png")
         else:
