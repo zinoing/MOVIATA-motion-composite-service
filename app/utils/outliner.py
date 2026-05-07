@@ -90,7 +90,7 @@ def _extract_halftone(
 
             x0, y0 = cx - radius, cy - radius
             x1, y1 = cx + radius, cy + radius
-            draw.ellipse([x0, y0, x1, y1], fill=(r, g, b, 255))
+            draw.ellipse([x0, y0, x1, y1], fill=(r, g, b, 255), outline=(r, g, b, 255))
 
     return result
 
