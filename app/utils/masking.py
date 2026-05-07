@@ -67,14 +67,16 @@ def _process_frame(frame_path: Path, points: list[dict] | None = None) -> dict:
 
             if object_coords:
                 predictor.set_image(rgb)  # ✅ object 전 초기화
-                all_coords = object_coords + person_coords
-                all_labels = [1] * len(object_coords) + [0] * len(person_coords)
-                masks, scores, _ = predictor.predict(
-                    point_coords=np.array(all_coords, dtype=np.float32),
-                    point_labels=np.array(all_labels, dtype=np.int32),
-                    multimask_output=True,
-                )
-                object_mask = masks[int(scores.argmax())]
+                for obj_coord in object_coords:
+                    all_coords = [obj_coord] + person_coords
+                    all_labels = [1] + [0] * len(person_coords)
+                    masks, scores, _ = predictor.predict(
+                        point_coords=np.array(all_coords, dtype=np.float32),
+                        point_labels=np.array(all_labels, dtype=np.int32),
+                        multimask_output=True,
+                    )
+                    mask = masks[int(scores.argmax())].astype(bool)
+                    object_mask = mask if object_mask is None else np.logical_or(object_mask, mask)
 
     if person_mask is not None and object_mask is not None:
         object_mask = np.logical_and(object_mask.astype(bool), ~person_mask.astype(bool))
