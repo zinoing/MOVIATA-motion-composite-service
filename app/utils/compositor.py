@@ -17,7 +17,7 @@ def save_layers(outlined_frames: list[dict], job_id: str) -> list[dict]:
 
         w, h = person.size
         # ✅ 투명 캔버스 → person 먼저 → object 위에
-        combined = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+        combined = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         combined = Image.alpha_composite(combined, person)
         if obj is not None:
             combined = Image.alpha_composite(combined, obj)
@@ -52,7 +52,7 @@ def composite_frames(
         obj_outline: Image.Image | None = item.get("object_outline")
         w, h = person_outline.size
 
-        canvas = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+        canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         canvas = Image.alpha_composite(canvas, person_outline)
         if obj_outline is not None:
             canvas = Image.alpha_composite(canvas, obj_outline)

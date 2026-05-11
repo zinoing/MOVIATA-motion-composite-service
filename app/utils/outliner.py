@@ -37,55 +37,65 @@ def _extract_outline(pil_rgba: Image.Image, color: str, thickness: int) -> Image
 def _extract_halftone(
     pil_rgba: Image.Image,
     color: str,
-    dot_spacing: int = 15,
-    dot_radius_max: float = 0.58,  # 최대 점 크기 (간격 대비 비율)
-    dot_radius_min: float = 0.10,  # 최소 점 크기
-    threshold: float = 0.08,       # 이 밀도 이하 점 생략
-    blur_sigma: float = 3.0,       # 경계 페이드용 blur (마스크에만 적용)
-    base_resolution: int = 1000,   # 해상도 보정 기준
+    dot_spacing: int = 15,    # 18 → 15 (더 촘촘하게)
+    dot_radius_max: float = 0.45,  # 0.55 → 0.45 (최대 점 작게)
+    dot_radius_min: float = 0.06,  # 0.08 → 0.06 (최소 점 작게)
+    threshold: float = 0.05,
+    blur_sigma: float = 1.0,
+    base_resolution: int = 1000,
+    supersample: int = 3,
 ) -> Image.Image:
-    """
-    Alpha 마스크 기반 하프톤:
-    - 마스크 내부 = 점 그림, 외부 = 점 없음
-    - 경계부는 Gaussian blur로 자연스럽게 페이드
-    - cv2.circle 사용 (PIL ellipse 십자가 버그 방지)
-    - 해상도에 따라 dot_spacing 자동 보정
-    """
     arr = np.array(pil_rgba)
-    alpha = arr[:, :, 3].astype(np.float32)  # 0~255
+    alpha = arr[:, :, 3]
     h, w = alpha.shape
+    orig_w, orig_h = pil_rgba.size
 
-    # ── 1. 해상도 자동 보정 ──────────────────────────────────────
-    # 기준 해상도(1000px) 대비 현재 이미지 크기로 spacing 스케일
-    # → 작은 이미지도 큰 이미지도 동일한 밀도처럼 보임
+    # ── 1. 해상도 자동 보정
     scale = min(w, h) / base_resolution
-    sp = max(6, int(dot_spacing * scale))  # 최소 6px 보장
+    sp = max(6, int(dot_spacing * scale))
 
-    # ── 2. 마스크 alpha blur → 경계 자연스러운 페이드 ──────────
-    # 마스크 내부 = 1.0, 경계부 = 0→1 fade, 외부 = 0.0
-    alpha_norm = alpha / 255.0
-    density = cv2.GaussianBlur(alpha_norm, (0, 0), sigmaX=blur_sigma)
+    # ── 2. alpha_mask — 노이즈 제거 + 경계 축소
+    alpha_mask = (alpha > 10).astype(np.uint8)
+    kernel_open = np.ones((5, 5), np.uint8)
+    alpha_mask = cv2.morphologyEx(alpha_mask, cv2.MORPH_OPEN, kernel_open)
+    kernel_erode = np.ones((3, 3), np.uint8)
+    alpha_mask = cv2.erode(alpha_mask, kernel_erode, iterations=2).astype(np.float32)
 
-    # ── 5. cv2로 점 그리기 (PIL ellipse 십자가 버그 방지) ────────
+    if alpha_mask.max() == 0:
+        return Image.new("RGBA", (orig_w, orig_h), (0, 0, 0, 0))
+
+    # ── 3. luma 기반 density (어두울수록 큰 점)
+    luma = (0.299 * arr[:, :, 0].astype(np.float32) +
+            0.587 * arr[:, :, 1].astype(np.float32) +
+            0.114 * arr[:, :, 2].astype(np.float32))
+    inverted = 1.0 - luma / 255.0
+
+    # ── 4. blur 후 mask 적용 (blur 먼저, mask 나중)
+    blurred = cv2.GaussianBlur(inverted, (0, 0), sigmaX=blur_sigma)
+    density = blurred * alpha_mask
+
+    # ── 5. 감마 보정으로 대비 강화
+    density = np.power(density, 0.5)
+    density = np.clip(density, 0.0, 1.0)
+
+    # ── 6. 슈퍼샘플 캔버스에 점 그리기
+    S = supersample
     r, g, b = hex_to_rgb(color)
-    canvas = np.zeros((h, w, 4), dtype=np.uint8)
+    canvas = np.zeros((h * S, w * S, 4), dtype=np.uint8)
 
     for cy in range(sp // 2, h, sp):
         for cx in range(sp // 2, w, sp):
             d = density[cy, cx]
-
-            # threshold 이하 → 점 생략
             if d < threshold:
                 continue
-
-            radius = int((dot_radius_min + (dot_radius_max - dot_radius_min) * d) * sp)
-
+            radius = int((dot_radius_min + (dot_radius_max - dot_radius_min) * d) * sp * S)
             if radius < 1:
                 continue
+            cv2.circle(canvas, (cx * S, cy * S), radius, (r, g, b, 255), -1, lineType=cv2.LINE_AA)
 
-            cv2.circle(canvas, (cx, cy), radius, (r, g, b, 255), -1, lineType=cv2.LINE_AA)
-
-    return Image.fromarray(canvas, "RGBA")
+    # ── 7. 원본 크기로 축소
+    result = cv2.resize(canvas, (orig_w, orig_h), interpolation=cv2.INTER_AREA)
+    return Image.fromarray(result, "RGBA")
 
 
 def apply_outlines(
