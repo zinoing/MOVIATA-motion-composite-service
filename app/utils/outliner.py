@@ -38,46 +38,57 @@ def _extract_outline(pil_rgba: Image.Image, color: str, thickness: int) -> Image
 def _extract_halftone(
     pil_rgba: Image.Image,
     color: str,
-    dot_spacing: int = 15,        # grid cell size in pixels
-    blur_sigma: float = 5.0,      # gaussian blur sigma — controls edge fade width
-    dot_radius_max: float = 0.62, # max dot radius as fraction of dot_spacing
-    dot_radius_min: float = 0.05, # min dot radius as fraction of dot_spacing
-    gamma: float = 1.0,           # density gamma correction (1.0 = linear)
-    threshold: float = 0.05,      # density below this value skips the dot
+    dot_spacing: int = 15,        # 기준 해상도(1000px) 기준 간격
+    dot_radius_max: float = 0.60, # 최대 점 크기 비율
+    dot_radius_min: float = 0.05, # 최소 점 크기 비율
+    threshold: float = 0.05,      # 이 밀도 이하는 점 안 그림
+    base_resolution: int = 1000,  # 해상도 보정 기준값
 ) -> Image.Image:
     """
-    Nike-style halftone fill:
-    - Gaussian blur generates a smooth density map for natural edge fade
-    - Straight grid (horizontal/vertical)
-    - Dot size scaled by density
+    SAM2 마스크 기반 역휘도 하프톤:
+    1. 마스크 내부 픽셀의 실제 밝기(역휘도)로 점 크기 결정
+    2. 마스크 외부는 투명 (점 없음)
+    3. 이미지 해상도에 따라 dot_spacing 자동 보정
+       → 어떤 해상도에서도 동일한 밀도로 보임
     """
     arr = np.array(pil_rgba)
     alpha = arr[:, :, 3]
     h, w = alpha.shape
 
-    # extract binary silhouette
-    _, silhouette = cv2.threshold(alpha, 10, 255, cv2.THRESH_BINARY)
+    # ✅ 1. 해상도 기반 dot_spacing 자동 보정
+    # 기준 해상도(1000px) 대비 현재 이미지 크기 비율로 spacing 조절
+    scale = min(w, h) / base_resolution
+    adjusted_spacing = max(4, int(dot_spacing * scale))
 
-    # blur silhouette to get density map — edges naturally fall toward 0
-    blurred = cv2.GaussianBlur(silhouette.astype(np.float32), (0, 0), sigmaX=blur_sigma)
-    density = blurred / 255.0  # 0.0 ~ 1.0
-
-    if gamma != 1.0:
-        density = np.power(density, gamma)
+    # ✅ 2. 원본 RGB → 그레이스케일 → 역휘도
+    # 어두운 픽셀 → density 높음 → 점 큼
+    # 밝은 픽셀 → density 낮음 → 점 작음
+    rgb = arr[:, :, :3]
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    density = 1.0 - (gray / 255.0)  # 역휘도
 
     r, g, b = hex_to_rgb(color)
     result = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(result)
 
-    # straight grid centered in each cell
-    for cy in range(dot_spacing // 2, h, dot_spacing):
-        for cx in range(dot_spacing // 2, w, dot_spacing):
+    # ✅ 3. 수직/수평 정사각형 격자로 점 배치
+    for cy in range(adjusted_spacing // 2, h, adjusted_spacing):
+        for cx in range(adjusted_spacing // 2, w, adjusted_spacing):
+
+            # 마스크 밖 → 점 안 그림
+            if alpha[cy, cx] < 10:
+                continue
+
             d = density[cy, cx]
 
+            # threshold 이하 밀도 → 점 안 그림 (너무 밝은 부분 제거)
             if d < threshold:
                 continue
 
-            radius = int((dot_radius_min + (dot_radius_max - dot_radius_min) * d) * dot_spacing)
+            radius = int(
+                (dot_radius_min + (dot_radius_max - dot_radius_min) * d)
+                * adjusted_spacing
+            )
             if radius < 1:
                 continue
 
