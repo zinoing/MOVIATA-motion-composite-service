@@ -57,13 +57,14 @@ def _execute(
 
         _set(job_id, "PROGRESS", step="outlining", progress=50)
         style = "halftone" if mode == "ghost" else "outline"
+        halftone_color = "#000000" if style == "halftone" else person_color
         frames_to_composite = apply_outlines(
             masked,
-            person_color=person_color,
+            person_color=halftone_color,
             background_color=background_color,
             thickness=outline_thickness,
             style=style,
-            object_color="#FF5A1F",    # ✅ object → 주황색
+            object_color="#FF5A1F",
         )
 
         _set(job_id, "PROGRESS", step="compositing", progress=75)

@@ -1,9 +1,8 @@
-import math
 import tempfile
 from pathlib import Path
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 
 def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -38,65 +37,55 @@ def _extract_outline(pil_rgba: Image.Image, color: str, thickness: int) -> Image
 def _extract_halftone(
     pil_rgba: Image.Image,
     color: str,
-    dot_spacing: int = 15,        # 기준 해상도(1000px) 기준 간격
-    dot_radius_max: float = 0.60, # 최대 점 크기 비율
-    dot_radius_min: float = 0.05, # 최소 점 크기 비율
-    threshold: float = 0.05,      # 이 밀도 이하는 점 안 그림
-    base_resolution: int = 1000,  # 해상도 보정 기준값
+    dot_spacing: int = 15,
+    dot_radius_max: float = 0.58,  # 최대 점 크기 (간격 대비 비율)
+    dot_radius_min: float = 0.10,  # 최소 점 크기
+    threshold: float = 0.08,       # 이 밀도 이하 점 생략
+    blur_sigma: float = 3.0,       # 경계 페이드용 blur (마스크에만 적용)
+    base_resolution: int = 1000,   # 해상도 보정 기준
 ) -> Image.Image:
     """
-    SAM2 마스크 기반 역휘도 하프톤:
-    1. 마스크 내부 픽셀의 실제 밝기(역휘도)로 점 크기 결정
-    2. 마스크 외부는 투명 (점 없음)
-    3. 이미지 해상도에 따라 dot_spacing 자동 보정
-       → 어떤 해상도에서도 동일한 밀도로 보임
+    Alpha 마스크 기반 하프톤:
+    - 마스크 내부 = 점 그림, 외부 = 점 없음
+    - 경계부는 Gaussian blur로 자연스럽게 페이드
+    - cv2.circle 사용 (PIL ellipse 십자가 버그 방지)
+    - 해상도에 따라 dot_spacing 자동 보정
     """
     arr = np.array(pil_rgba)
-    alpha = arr[:, :, 3]
+    alpha = arr[:, :, 3].astype(np.float32)  # 0~255
     h, w = alpha.shape
 
-    # ✅ 1. 해상도 기반 dot_spacing 자동 보정
-    # 기준 해상도(1000px) 대비 현재 이미지 크기 비율로 spacing 조절
+    # ── 1. 해상도 자동 보정 ──────────────────────────────────────
+    # 기준 해상도(1000px) 대비 현재 이미지 크기로 spacing 스케일
+    # → 작은 이미지도 큰 이미지도 동일한 밀도처럼 보임
     scale = min(w, h) / base_resolution
-    adjusted_spacing = max(4, int(dot_spacing * scale))
+    sp = max(6, int(dot_spacing * scale))  # 최소 6px 보장
 
-    # ✅ 2. 원본 RGB → 그레이스케일 → 역휘도
-    # 어두운 픽셀 → density 높음 → 점 큼
-    # 밝은 픽셀 → density 낮음 → 점 작음
-    rgb = arr[:, :, :3]
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
-    density = 1.0 - (gray / 255.0)  # 역휘도
+    # ── 2. 마스크 alpha blur → 경계 자연스러운 페이드 ──────────
+    # 마스크 내부 = 1.0, 경계부 = 0→1 fade, 외부 = 0.0
+    alpha_norm = alpha / 255.0
+    density = cv2.GaussianBlur(alpha_norm, (0, 0), sigmaX=blur_sigma)
 
+    # ── 5. cv2로 점 그리기 (PIL ellipse 십자가 버그 방지) ────────
     r, g, b = hex_to_rgb(color)
-    result = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(result)
+    canvas = np.zeros((h, w, 4), dtype=np.uint8)
 
-    # ✅ 3. 수직/수평 정사각형 격자로 점 배치
-    for cy in range(adjusted_spacing // 2, h, adjusted_spacing):
-        for cx in range(adjusted_spacing // 2, w, adjusted_spacing):
-
-            # 마스크 밖 → 점 안 그림
-            if alpha[cy, cx] < 10:
-                continue
-
+    for cy in range(sp // 2, h, sp):
+        for cx in range(sp // 2, w, sp):
             d = density[cy, cx]
 
-            # threshold 이하 밀도 → 점 안 그림 (너무 밝은 부분 제거)
+            # threshold 이하 → 점 생략
             if d < threshold:
                 continue
 
-            radius = int(
-                (dot_radius_min + (dot_radius_max - dot_radius_min) * d)
-                * adjusted_spacing
-            )
+            radius = int((dot_radius_min + (dot_radius_max - dot_radius_min) * d) * sp)
+
             if radius < 1:
                 continue
 
-            x0, y0 = cx - radius, cy - radius
-            x1, y1 = cx + radius, cy + radius
-            draw.ellipse([x0, y0, x1, y1], fill=(r, g, b, 255))
+            cv2.circle(canvas, (cx, cy), radius, (r, g, b, 255), -1, lineType=cv2.LINE_AA)
 
-    return result
+    return Image.fromarray(canvas, "RGBA")
 
 
 def apply_outlines(
