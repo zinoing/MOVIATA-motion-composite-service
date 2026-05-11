@@ -38,32 +38,30 @@ def _extract_outline(pil_rgba: Image.Image, color: str, thickness: int) -> Image
 def _extract_halftone(
     pil_rgba: Image.Image,
     color: str,
-    dot_spacing: int = 15,        # 툴 기준 간격=15
-    blur_sigma: float = 5.0,      # 툴 기준 흐림=5 → 자연스러운 페이드 핵심
-    dot_radius_max: float = 0.62, # 중앙 최대 크기 (간격 대비 비율)
-    dot_radius_min: float = 0.05, # 경계 최소 크기
-    gamma: float = 1.0,           # 툴 기준 감마=1 (선형)
-    threshold: float = 0.05,      # 이 이하 밀도는 점 안 그림
+    dot_spacing: int = 15,        # grid cell size in pixels
+    blur_sigma: float = 5.0,      # gaussian blur sigma — controls edge fade width
+    dot_radius_max: float = 0.62, # max dot radius as fraction of dot_spacing
+    dot_radius_min: float = 0.05, # min dot radius as fraction of dot_spacing
+    gamma: float = 1.0,           # density gamma correction (1.0 = linear)
+    threshold: float = 0.05,      # density below this value skips the dot
 ) -> Image.Image:
     """
-    나이키 스타일 하프톤:
-    - Gaussian Blur로 밀도맵 생성 → 자연스러운 가장자리 페이드
-    - 수직/수평 정사각형 격자
-    - 밀도 기반 점 크기 결정
+    Nike-style halftone fill:
+    - Gaussian blur generates a smooth density map for natural edge fade
+    - Straight grid (horizontal/vertical)
+    - Dot size scaled by density
     """
     arr = np.array(pil_rgba)
     alpha = arr[:, :, 3]
     h, w = alpha.shape
 
-    # 1. 실루엣 추출
+    # extract binary silhouette
     _, silhouette = cv2.threshold(alpha, 10, 255, cv2.THRESH_BINARY)
 
-    # 2. ✅ 핵심: Gaussian Blur로 밀도맵 생성
-    #    경계부는 blur로 자연스럽게 0에 가까워짐
+    # blur silhouette to get density map — edges naturally fall toward 0
     blurred = cv2.GaussianBlur(silhouette.astype(np.float32), (0, 0), sigmaX=blur_sigma)
     density = blurred / 255.0  # 0.0 ~ 1.0
 
-    # 3. 감마 보정 (gamma=1이면 선형)
     if gamma != 1.0:
         density = np.power(density, gamma)
 
@@ -71,12 +69,11 @@ def _extract_halftone(
     result = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(result)
 
-    # 4. ✅ 수직/수평 정사각형 격자 (툴과 동일)
+    # straight grid centered in each cell
     for cy in range(dot_spacing // 2, h, dot_spacing):
         for cx in range(dot_spacing // 2, w, dot_spacing):
             d = density[cy, cx]
 
-            # threshold 이하는 점 안 그림
             if d < threshold:
                 continue
 
@@ -97,7 +94,7 @@ def apply_outlines(
     background_color: str,
     thickness: int,
     style: str = "halftone",
-    dot_spacing: int = 15,        # 기본값 12→15으로 통일
+    dot_spacing: int = 15,
     object_color: str = "#FF5A1F",
 ) -> list[dict]:
     print(f"[DEBUG] person_color={person_color}, object_color={object_color}")
