@@ -38,55 +38,45 @@ def _extract_outline(pil_rgba: Image.Image, color: str, thickness: int) -> Image
 def _extract_halftone(
     pil_rgba: Image.Image,
     color: str,
-    dot_spacing: int = 8,
-    dot_radius_max: float = 0.48,  # ✅ 중앙 최대 크기 (거의 붙을 만큼)
-    dot_radius_min: float = 0.04,  # ✅ 변경: 0.08 → 0.04 (경계부 점이 훨씬 작아짐)
-    gamma: float = 0.25,           # ✅ 변경: 0.5 → 0.25 (대비 극대화, 경계부 급격히 사라짐)
-    threshold: float = 0.08,       # ✅ 변경: 0.02 → 0.08 (희미한 점 아예 제거)
+    dot_spacing: int = 15,        # 툴 기준 간격=15
+    blur_sigma: float = 5.0,      # 툴 기준 흐림=5 → 자연스러운 페이드 핵심
+    dot_radius_max: float = 0.62, # 중앙 최대 크기 (간격 대비 비율)
+    dot_radius_min: float = 0.05, # 경계 최소 크기
+    gamma: float = 1.0,           # 툴 기준 감마=1 (선형)
+    threshold: float = 0.05,      # 이 이하 밀도는 점 안 그림
 ) -> Image.Image:
     """
     나이키 스타일 하프톤:
-    - 중심부: 점이 거의 붙을 만큼 크고 빽빽
-    - 경계부: 점이 극도로 작아지다가 완전히 사라짐
-    - 대비 강함: gamma를 낮출수록 경계부가 더 급격히 사라짐
+    - Gaussian Blur로 밀도맵 생성 → 자연스러운 가장자리 페이드
+    - 수직/수평 정사각형 격자
+    - 밀도 기반 점 크기 결정
     """
     arr = np.array(pil_rgba)
     alpha = arr[:, :, 3]
     h, w = alpha.shape
 
+    # 1. 실루엣 추출
     _, silhouette = cv2.threshold(alpha, 10, 255, cv2.THRESH_BINARY)
 
-    # distance transform: 마스크 내부 중심일수록 값이 큼
-    dist = cv2.distanceTransform(silhouette, cv2.DIST_L2, 5)
+    # 2. ✅ 핵심: Gaussian Blur로 밀도맵 생성
+    #    경계부는 blur로 자연스럽게 0에 가까워짐
+    blurred = cv2.GaussianBlur(silhouette.astype(np.float32), (0, 0), sigmaX=blur_sigma)
+    density = blurred / 255.0  # 0.0 ~ 1.0
 
-    # ✅ 핵심: 낮은 gamma → 경계부 점이 급격히 0에 가까워짐
-    # gamma=0.25: 중앙만 크고 나머지는 급격히 사라지는 나이키 스타일
-    max_dist = dist.max()
-    if max_dist > 0:
-        dist_norm = (dist / max_dist) ** gamma
-    else:
-        dist_norm = dist
+    # 3. 감마 보정 (gamma=1이면 선형)
+    if gamma != 1.0:
+        density = np.power(density, gamma)
 
     r, g, b = hex_to_rgb(color)
     result = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(result)
 
-    cos_a = math.cos(math.radians(45))
-    sin_a = math.sin(math.radians(45))
-    n_range = int(math.sqrt(w * w + h * h) / dot_spacing) + 2
-    cx0, cy0 = w / 2, h / 2
+    # 4. ✅ 수직/수평 정사각형 격자 (툴과 동일)
+    for cy in range(dot_spacing // 2, h, dot_spacing):
+        for cx in range(dot_spacing // 2, w, dot_spacing):
+            d = density[cy, cx]
 
-    for i in range(-n_range, n_range):
-        for j in range(-n_range, n_range):
-            cx = int(cx0 + (i * cos_a - j * sin_a) * dot_spacing)
-            cy = int(cy0 + (i * sin_a + j * cos_a) * dot_spacing)
-
-            if not (0 <= cx < w and 0 <= cy < h):
-                continue
-
-            d = dist_norm[cy, cx]
-
-            # ✅ threshold 높임: 희미한 경계 점 완전 제거
+            # threshold 이하는 점 안 그림
             if d < threshold:
                 continue
 
@@ -96,7 +86,7 @@ def _extract_halftone(
 
             x0, y0 = cx - radius, cy - radius
             x1, y1 = cx + radius, cy + radius
-            draw.ellipse([x0, y0, x1, y1], fill=(r, g, b, 255), outline=(r, g, b, 255))
+            draw.ellipse([x0, y0, x1, y1], fill=(r, g, b, 255))
 
     return result
 
@@ -107,7 +97,7 @@ def apply_outlines(
     background_color: str,
     thickness: int,
     style: str = "halftone",
-    dot_spacing: int = 12,
+    dot_spacing: int = 15,        # 기본값 12→15으로 통일
     object_color: str = "#FF5A1F",
 ) -> list[dict]:
     print(f"[DEBUG] person_color={person_color}, object_color={object_color}")
