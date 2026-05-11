@@ -59,7 +59,7 @@ def _execute(
         style = "halftone" if mode == "ghost" else "outline"
         frames_to_composite = apply_outlines(
             masked,
-            person_color="#ffffff",    # ✅ person → 흰색
+            person_color=person_color,
             background_color=background_color,
             thickness=outline_thickness,
             style=style,
