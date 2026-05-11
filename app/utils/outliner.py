@@ -39,13 +39,16 @@ def _extract_halftone(
     pil_rgba: Image.Image,
     color: str,
     dot_spacing: int = 8,
-    dot_radius_max: float = 0.48,
-    dot_radius_min: float = 0.08,
+    dot_radius_max: float = 0.48,  # ✅ 중앙 최대 크기 (거의 붙을 만큼)
+    dot_radius_min: float = 0.04,  # ✅ 변경: 0.08 → 0.04 (경계부 점이 훨씬 작아짐)
+    gamma: float = 0.25,           # ✅ 변경: 0.5 → 0.25 (대비 극대화, 경계부 급격히 사라짐)
+    threshold: float = 0.08,       # ✅ 변경: 0.02 → 0.08 (희미한 점 아예 제거)
 ) -> Image.Image:
     """
-    마스크 영역을 할프톤 dot 패턴으로 채운다.
-    중심부는 크고 촘촘하게, 경계부는 작고 희박하게.
-    distance transform 기반으로 크기 결정.
+    나이키 스타일 하프톤:
+    - 중심부: 점이 거의 붙을 만큼 크고 빽빽
+    - 경계부: 점이 극도로 작아지다가 완전히 사라짐
+    - 대비 강함: gamma를 낮출수록 경계부가 더 급격히 사라짐
     """
     arr = np.array(pil_rgba)
     alpha = arr[:, :, 3]
@@ -56,10 +59,11 @@ def _extract_halftone(
     # distance transform: 마스크 내부 중심일수록 값이 큼
     dist = cv2.distanceTransform(silhouette, cv2.DIST_L2, 5)
 
-    # 정규화 후 감마 적용 → 경계부 dot이 더 급격히 작아짐
+    # ✅ 핵심: 낮은 gamma → 경계부 점이 급격히 0에 가까워짐
+    # gamma=0.25: 중앙만 크고 나머지는 급격히 사라지는 나이키 스타일
     max_dist = dist.max()
     if max_dist > 0:
-        dist_norm = (dist / max_dist) ** 0.5
+        dist_norm = (dist / max_dist) ** gamma
     else:
         dist_norm = dist
 
@@ -81,7 +85,9 @@ def _extract_halftone(
                 continue
 
             d = dist_norm[cy, cx]
-            if d < 0.02:
+
+            # ✅ threshold 높임: 희미한 경계 점 완전 제거
+            if d < threshold:
                 continue
 
             radius = int((dot_radius_min + (dot_radius_max - dot_radius_min) * d) * dot_spacing)
@@ -93,6 +99,7 @@ def _extract_halftone(
             draw.ellipse([x0, y0, x1, y1], fill=(r, g, b, 255), outline=(r, g, b, 255))
 
     return result
+
 
 def apply_outlines(
     masked_frames: list[dict],
