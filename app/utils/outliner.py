@@ -37,24 +37,34 @@ def _extract_outline(pil_rgba: Image.Image, color: str, thickness: int) -> Image
 def _extract_halftone(
     pil_rgba: Image.Image,
     color: str,
-    dot_spacing: int = 15,    # 18 → 15 (더 촘촘하게)
-    dot_radius_max: float = 0.45,  # 0.55 → 0.45 (최대 점 작게)
-    dot_radius_min: float = 0.06,  # 0.08 → 0.06 (최소 점 작게)
+    dot_spacing: int = 15,
+    dot_radius_max: float = 0.45,
+    dot_radius_min: float = 0.06,
     threshold: float = 0.05,
     blur_sigma: float = 1.0,
     base_resolution: int = 1000,
     supersample: int = 3,
 ) -> Image.Image:
     arr = np.array(pil_rgba)
-    alpha = arr[:, :, 3]
-    h, w = alpha.shape
     orig_w, orig_h = pil_rgba.size
 
-    # ── 1. 해상도 자동 보정
+    # ── 1. 피사체 bounding box로 크롭 — 프레임 내 비율과 무관하게 점 밀도 균일화
+    full_alpha = arr[:, :, 3]
+    ys, xs = np.where(full_alpha > 10)
+    if len(xs) == 0:
+        return Image.new("RGBA", (orig_w, orig_h), (0, 0, 0, 0))
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+
+    cropped = arr[y0:y1, x0:x1]
+    alpha = cropped[:, :, 3]
+    h, w = alpha.shape
+
+    # ── 2. 해상도 자동 보정 (피사체 실제 크기 기준)
     scale = min(w, h) / base_resolution
     sp = max(6, int(dot_spacing * scale))
 
-    # ── 2. alpha_mask — 노이즈 제거 + 경계 축소
+    # ── 3. alpha_mask — 노이즈 제거 + 경계 축소
     alpha_mask = (alpha > 10).astype(np.uint8)
     kernel_open = np.ones((5, 5), np.uint8)
     alpha_mask = cv2.morphologyEx(alpha_mask, cv2.MORPH_OPEN, kernel_open)
@@ -64,21 +74,21 @@ def _extract_halftone(
     if alpha_mask.max() == 0:
         return Image.new("RGBA", (orig_w, orig_h), (0, 0, 0, 0))
 
-    # ── 3. luma 기반 density (어두울수록 큰 점)
-    luma = (0.299 * arr[:, :, 0].astype(np.float32) +
-            0.587 * arr[:, :, 1].astype(np.float32) +
-            0.114 * arr[:, :, 2].astype(np.float32))
+    # ── 4. luma 기반 density (어두울수록 큰 점)
+    luma = (0.299 * cropped[:, :, 0].astype(np.float32) +
+            0.587 * cropped[:, :, 1].astype(np.float32) +
+            0.114 * cropped[:, :, 2].astype(np.float32))
     inverted = 1.0 - luma / 255.0
 
-    # ── 4. blur 후 mask 적용 (blur 먼저, mask 나중)
+    # ── 5. blur 후 mask 적용
     blurred = cv2.GaussianBlur(inverted, (0, 0), sigmaX=blur_sigma)
     density = blurred * alpha_mask
 
-    # ── 5. 감마 보정으로 대비 강화
+    # ── 6. 감마 보정으로 대비 강화
     density = np.power(density, 0.5)
     density = np.clip(density, 0.0, 1.0)
 
-    # ── 6. 슈퍼샘플 캔버스에 점 그리기
+    # ── 7. 슈퍼샘플 캔버스에 점 그리기
     S = supersample
     r, g, b = hex_to_rgb(color)
     canvas = np.zeros((h * S, w * S, 4), dtype=np.uint8)
@@ -93,8 +103,10 @@ def _extract_halftone(
                 continue
             cv2.circle(canvas, (cx * S, cy * S), radius, (r, g, b, 255), -1, lineType=cv2.LINE_AA)
 
-    # ── 7. 원본 크기로 축소
-    result = cv2.resize(canvas, (orig_w, orig_h), interpolation=cv2.INTER_AREA)
+    # ── 8. 크롭 크기로 축소 후 원본 캔버스에 배치
+    crop_result = cv2.resize(canvas, (x1 - x0, y1 - y0), interpolation=cv2.INTER_AREA)
+    result = np.zeros((orig_h, orig_w, 4), dtype=np.uint8)
+    result[y0:y1, x0:x1] = crop_result
     return Image.fromarray(result, "RGBA")
 
 

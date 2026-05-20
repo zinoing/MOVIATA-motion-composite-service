@@ -228,7 +228,11 @@ async def get_layer(job_id: str, index: int):
     layer_path = OUTPUTS_DIR / f"{job_id}_layer_{index}.png"
     if not layer_path.exists():
         raise HTTPException(status_code=404, detail="Layer not found")
-    return FileResponse(path=str(layer_path), media_type="image/png")
+    return FileResponse(
+        path=str(layer_path),
+        media_type="image/png",
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
 
 
 @router.get("/frame/{job_id}/{frame_index}")
